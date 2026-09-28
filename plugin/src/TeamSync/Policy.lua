@@ -246,10 +246,8 @@ function Policy.mergeChanges(existing: { Change }, incoming: { Change }): { Chan
 		local covered = false
 		for index = #merged, 1, -1 do
 			local other = merged[index]
-			if other.path == change.path and (other.tree or not change.tree) then
-				covered = true
-				break
-			elseif other.tree and isWithin(change.path, other.path) then
+			local sameOrWider = other.path == change.path and (other.tree or not change.tree)
+			if sameOrWider or (other.tree and isWithin(change.path, other.path)) then
 				covered = true
 				break
 			elseif change.tree and isWithin(other.path, change.path) then
