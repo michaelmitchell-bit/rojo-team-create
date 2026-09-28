@@ -23,7 +23,8 @@ local Roact = require(Packages.Roact)
 
 local strict = require(script.Parent.Parent.strict)
 
-local BRAND_COLOR = Color3.fromHex("E13835")
+-- Blue instead of upstream red (E13835), so the team sync build is easy to tell apart.
+local BRAND_COLOR = Color3.fromHex("357DE1")
 
 local Context = Roact.createContext({})
 

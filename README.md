@@ -1,45 +1,94 @@
-<div align="center">
-    <a href="https://rojo.space"><img src="assets/brand_images/logo-512.png" alt="Rojo" height="217" /></a>
-</div>
+# Rojo Team Create
 
-<div>&nbsp;</div>
+An unofficial fork of [Rojo](https://github.com/rojo-rbx/rojo) that lets more than one
+person sync into the same place (Team Create, or a shared place file) without
+overwriting each other.
 
-<div align="center">
-    <a href="https://github.com/rojo-rbx/rojo/actions"><img src="https://github.com/rojo-rbx/rojo/workflows/CI/badge.svg" alt="Actions status" /></a>
-    <a href="https://crates.io/crates/rojo"><img src="https://img.shields.io/crates/v/rojo.svg?label=latest%20release" alt="Latest server version" /></a>
-    <a href="https://rojo.space/docs"><img src="https://img.shields.io/badge/docs-website-brightgreen.svg" alt="Rojo Documentation" /></a>
-</div>
+With regular Rojo, the last person to sync wins. If two people are running
+`rojo serve` against the same Team Create place, each sync quietly replaces whatever
+the other person pushed, and you usually find out when a change you made ten minutes
+ago is just gone. The common advice is "only one person syncs" or "don't use Rojo with
+Team Create". This fork tries to fix the actual problem instead.
 
-<hr />
+## How it works
 
-**Rojo** is a tool designed to enable Roblox developers to use professional-grade software engineering tools.
+When you connect, Rojo already works out what it needs to change in the place to match
+your files. This fork compares that with what other people have synced into the place
+since your last sync.
 
-With Rojo, it's possible to use industry-leading tools like **Visual Studio Code** and **Git**.
+- **Nothing overlaps** (you already have their changes, or you're only touching scripts
+  they didn't): it syncs like normal Rojo.
+- **You'd overwrite someone else's changes**: it doesn't sync. The plugin lists the
+  scripts and who changed them. Get their changes into your files however your team
+  normally does it (git pull, copying files, whatever), then reconnect.
+- **You both edited the same script and already merged it by hand**: press
+  **Sync anyway**. That gets recorded too.
 
-Rojo is designed for power users who want to use the best tools available for building games, libraries, and plugins.
+It doesn't depend on git or any other version control. The record of who synced what
+lives in the place itself, in `ServerStorage.RojoTeamSync`.
 
-## Features
-Rojo enables:
+A few other things:
 
-* Working on scripts and models from the filesystem, in your favorite editor
-* Versioning your game, library, or plugin using Git or another VCS
-* Streaming `rbxmx` and `rbxm` models into your game in real time
-* Packaging and deploying your project to Roblox.com from the command line
-* Pulling Instances from Roblox place and model files back into an existing Rojo project with `rojo syncback`
+- If someone syncs while you're connected, your session stops so you don't keep
+  writing over them. Reconnect and it checks again.
+- A project with team sync turned on won't talk to the stock Rojo plugin, and this
+  plugin won't sync a project without team sync into a place that uses it. Mixing
+  versions fails loudly instead of silently.
+- The plugin is blue and its toolbar button says **Rojo Team**, so you can tell which
+  Rojo you have open.
 
-Rojo also has an optional two-way sync setting in the Studio plugin for syncing supported Studio edits back to the filesystem.
+## Setup
 
-Some workflows, like fully automatic conversion of every existing game into a Rojo project, are still limited and may require manual project configuration.
+Turn it on in your project file:
 
-## [Documentation](https://rojo.space/docs)
-Documentation is hosted in the [rojo.space repository](https://github.com/rojo-rbx/rojo.space).
+```json
+{
+  "name": "MyGame",
+  "teamSync": true,
+  "tree": {}
+}
+```
 
-## Contributing
-Check out our [contribution guide](CONTRIBUTING.md) for detailed instructions for helping work on Rojo!
+Everyone on the team needs this build. With [rokit](https://github.com/rojo-rbx/rokit),
+pin it in `rokit.toml`:
 
-Pull requests are welcome!
+```toml
+[tools]
+rojo = "michaelmitchell-bit/rojo-team-create@7.7.0-team.3"
+```
 
-Rojo supports Rust 1.88 and newer. The minimum supported version of Rust is based on the latest versions of the dependencies that Rojo has.
+then run:
+
+```sh
+rokit install
+rojo plugin install
+```
+
+You can also grab a binary from [Releases](https://github.com/michaelmitchell-bit/rojo-team-create/releases).
+`rojo plugin install` installs the plugin bundled with that exact binary, so the plugin
+and server always match. Restart Studio and remove the marketplace Rojo plugin if you
+have it, so only one Rojo is running.
+
+## Limitations
+
+- Everyone has to be on this build. Stock Rojo can't read `teamSync`, and the stock
+  plugin won't connect to a server that has it on.
+- The sync record is a value in ServerStorage. Anyone can delete it, which resets
+  tracking for that place.
+- It tracks instances by path, so two scripts with the same name in the same folder
+  count as one. That can cause an extra refusal, never a missed one.
+- Edits made directly in Studio (not through Rojo) aren't tracked, same as regular
+  Rojo.
+- It's currently based on Rojo 7.7.0.
+
+The details, including exactly what counts as overlapping, are in
+[docs/team-sync.md](docs/team-sync.md).
+
+## Everything else
+
+Everything besides team sync is regular Rojo, so the [Rojo docs](https://rojo.space/docs)
+apply. Please report team sync bugs here rather than on the upstream Rojo repo.
 
 ## License
-Rojo is available under the terms of the Mozilla Public License, Version 2.0. See [LICENSE.txt](LICENSE.txt) for details.
+
+MPL-2.0, same as Rojo. See [LICENSE.txt](LICENSE.txt).

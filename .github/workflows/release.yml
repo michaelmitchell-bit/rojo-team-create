@@ -4,6 +4,10 @@ on:
   push:
     tags: ["v*"]
 
+# Lets GITHUB_TOKEN create the release and upload its assets.
+permissions:
+  contents: write
+
 jobs:
   create-release:
     name: Create Release
@@ -14,7 +18,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create ${{ github.ref_name }} --draft --verify-tag --title ${{ github.ref_name }}
+          gh release create ${{ github.ref_name }} --verify-tag --title ${{ github.ref_name }} --notes "See CHANGELOG.md and docs/team-sync.md."
 
   build-plugin:
     needs: ["create-release"]
@@ -44,13 +48,6 @@ jobs:
         with:
           name: Rojo.rbxm
           path: Rojo.rbxm
-      
-      - name: Upload Plugin to Roblox
-        env:
-          RBX_API_KEY: ${{ secrets.PLUGIN_UPLOAD_TOKEN }}
-          RBX_UNIVERSE_ID: ${{ vars.PLUGIN_CI_PLACE_ID }}
-          RBX_PLACE_ID: ${{ vars.PLUGIN_CI_UNIVERSE_ID }}
-        run: lune run upload-plugin Rojo.rbxm
 
   build:
     needs: ["create-release"]

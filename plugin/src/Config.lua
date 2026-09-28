@@ -19,6 +19,9 @@ end
 return strict("Config", {
 	isDevBuild = isDevBuild,
 	codename = "Epiphany",
+	-- Where update checks look for newer releases. Forks point this at themselves
+	-- so users aren't told to "update" to a build without their changes.
+	releasesRepo = "michaelmitchell-bit/rojo-team-create",
 	version = realVersion,
 	expectedServerVersionString = ("%d.%d or newer"):format(realVersion[1], realVersion[2]),
 	protocolVersion = 5,

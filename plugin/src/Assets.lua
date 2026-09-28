@@ -17,9 +17,11 @@ local Assets = {
 	},
 	Images = {
 		Logo = "rbxassetid://5990772764",
-		PluginButton = "rbxassetid://3405341609",
-		PluginButtonConnected = "rbxassetid://9529783993",
-		PluginButtonWarning = "rbxassetid://9529784530",
+		-- Blue team sync variants of the upstream toolbar icons; sources and
+		-- ids in assets/brand_images/team.
+		PluginButton = "rbxassetid://122986568743037",
+		PluginButtonConnected = "rbxassetid://93454030363105",
+		PluginButtonWarning = "rbxassetid://83428661595936",
 		Icons = {
 			Close = "rbxassetid://6012985953",
 			Back = "rbxassetid://6017213752",

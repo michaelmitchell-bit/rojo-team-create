@@ -122,7 +122,9 @@ function Version.retrieveLatestCompatible(options: {
 
 	Log.debug("Retrieving latest compatible version from GitHub")
 
-	local success, releases = Http.get("https://api.github.com/repos/rojo-rbx/rojo/releases?per_page=10")
+	local success, releases = Http.get(
+		("https://api.github.com/repos/%s/releases?per_page=10"):format(Config.releasesRepo)
+	)
 		:andThen(function(response)
 			if response.code >= 400 then
 				local message = string.format("HTTP %s:\n%s", tostring(response.code), response.body)

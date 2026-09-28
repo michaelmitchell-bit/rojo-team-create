@@ -29,6 +29,11 @@ Making a new release? Simply add the new header with the version and date undern
 ```
 -->
 
+## 7.7.0-team.3 (Rojo Team Create)
+
+* Added team sync. Set `"teamSync": true` in a project and the plugin keeps a log in the place of what each sync changed, and won't sync over someone else's changes until you've pulled them in. See [docs/team-sync.md](docs/team-sync.md).
+* The plugin is blue and its toolbar button is labeled "Rojo Team".
+
 ## Unreleased
 
 ## [7.7.0] (July 1st, 2026)
