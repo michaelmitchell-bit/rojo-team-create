@@ -1,94 +1,63 @@
+<p align="center">
+  <img src="assets/brand_images/team/logo-512.png" alt="Rojo Team Create" height="160">
+</p>
+
 # Rojo Team Create
 
-An unofficial fork of [Rojo](https://github.com/rojo-rbx/rojo) that lets more than one
-person sync into the same place (Team Create, or a shared place file) without
-overwriting each other.
+An unofficial fork of [Rojo](https://github.com/rojo-rbx/rojo) that lets a whole team
+live-sync into the same place without overwriting each other.
 
-With regular Rojo, the last person to sync wins. If two people are running
-`rojo serve` against the same Team Create place, each sync quietly replaces whatever
-the other person pushed, and you usually find out when a change you made ten minutes
-ago is just gone. The common advice is "only one person syncs" or "don't use Rojo with
-Team Create". This fork tries to fix the actual problem instead.
+With regular Rojo, whoever syncs last wins. This fork checks what other people synced
+into the place since you last synced, and won't let you overwrite their changes until
+you've pulled them into your files.
 
 ## How it works
 
-When you connect, Rojo already works out what it needs to change in the place to match
-your files. This fork compares that with what other people have synced into the place
-since your last sync.
+- If nothing you'd change overlaps with what someone else synced, it syncs like normal.
+- If it would overwrite their changes, it stops and shows which scripts and who changed
+  them. Pull their changes (git, or however you share code) and reconnect.
+- Already merged by hand? Press **Sync anyway**.
+- If someone syncs while you're connected, your session stops so you don't write over them.
 
-- **Nothing overlaps** (you already have their changes, or you're only touching scripts
-  they didn't): it syncs like normal Rojo.
-- **You'd overwrite someone else's changes**: it doesn't sync. The plugin lists the
-  scripts and who changed them. Get their changes into your files however your team
-  normally does it (git pull, copying files, whatever), then reconnect.
-- **You both edited the same script and already merged it by hand**: press
-  **Sync anyway**. That gets recorded too.
-
-It doesn't depend on git or any other version control. The record of who synced what
-lives in the place itself, in `ServerStorage.RojoTeamSync`.
-
-A few other things:
-
-- If someone syncs while you're connected, your session stops so you don't keep
-  writing over them. Reconnect and it checks again.
-- A project with team sync turned on won't talk to the stock Rojo plugin, and this
-  plugin won't sync a project without team sync into a place that uses it. Mixing
-  versions fails loudly instead of silently.
-- The plugin is blue and its toolbar button says **Rojo Team**, so you can tell which
-  Rojo you have open.
+It works with any version control, or none. The history lives in the place, in
+`ServerStorage.RojoTeamSync`. More detail in [docs/team-sync.md](docs/team-sync.md).
 
 ## Setup
 
-Turn it on in your project file:
+1. Add `"teamSync": true` to your project file.
+2. Pin this build in `rokit.toml`, replacing any existing `rojo` line:
+   ```toml
+   rojo = "michaelmitchell-bit/rojo-team-create@7.7.0-team.3"
+   ```
+3. Install it and its Studio plugin:
+   ```sh
+   rokit install
+   rojo plugin install
+   ```
+4. Restart Studio and remove the marketplace Rojo plugin if you have it. You should see
+   a blue **Rojo Team** button.
 
-```json
-{
-  "name": "MyGame",
-  "teamSync": true,
-  "tree": {}
-}
+No rokit? Grab a binary from [Releases](https://github.com/michaelmitchell-bit/rojo-team-create/releases)
+and run `rojo plugin install` with it. If `rojo --version` doesn't end in `-team.3`
+afterwards, see [SETUP.md](SETUP.md).
+
+### AI setup
+
+From your project folder, paste this into Claude Code, Codex, Cursor or whatever agent
+you use:
+
+```
+Set up Rojo Team Create for this project by following
+https://github.com/michaelmitchell-bit/rojo-team-create/blob/main/SETUP.md
 ```
 
-Everyone on the team needs this build. With [rokit](https://github.com/rojo-rbx/rokit),
-pin it in `rokit.toml`:
-
-```toml
-[tools]
-rojo = "michaelmitchell-bit/rojo-team-create@7.7.0-team.3"
-```
-
-then run:
-
-```sh
-rokit install
-rojo plugin install
-```
-
-You can also grab a binary from [Releases](https://github.com/michaelmitchell-bit/rojo-team-create/releases).
-`rojo plugin install` installs the plugin bundled with that exact binary, so the plugin
-and server always match. Restart Studio and remove the marketplace Rojo plugin if you
-have it, so only one Rojo is running.
-
-## Limitations
-
-- Everyone has to be on this build. Stock Rojo can't read `teamSync`, and the stock
-  plugin won't connect to a server that has it on.
-- The sync record is a value in ServerStorage. Anyone can delete it, which resets
-  tracking for that place.
-- It tracks instances by path, so two scripts with the same name in the same folder
-  count as one. That can cause an extra refusal, never a missed one.
-- Edits made directly in Studio (not through Rojo) aren't tracked, same as regular
-  Rojo.
-- It's currently based on Rojo 7.7.0.
-
-The details, including exactly what counts as overlapping, are in
-[docs/team-sync.md](docs/team-sync.md).
+[SETUP.md](SETUP.md) walks the agent through checking what's installed, fixing clashes
+with an old Rojo on your PATH, and installing the plugin. It asks you before anything
+like quitting Studio.
 
 ## Everything else
 
-Everything besides team sync is regular Rojo, so the [Rojo docs](https://rojo.space/docs)
-apply. Please report team sync bugs here rather than on the upstream Rojo repo.
+Besides team sync, this is regular Rojo, so the [Rojo docs](https://rojo.space/docs)
+apply. Report team sync bugs here rather than upstream.
 
-## License
-
-MPL-2.0, same as Rojo. See [LICENSE.txt](LICENSE.txt).
+MPL-2.0. See [LICENSE.txt](LICENSE.txt).
