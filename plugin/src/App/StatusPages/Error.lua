@@ -139,10 +139,25 @@ function ErrorPage:render()
 				}),
 			}),
 
+			Action = if self.state.errorAction
+				then e(TextButton, {
+					text = self.state.errorAction.text,
+					style = "Solid",
+					transparency = self.props.transparency,
+					layoutOrder = 2,
+					onClick = self.state.errorAction.onClick,
+				}, {
+					Tip = e(Tooltip.Trigger, {
+						text = self.state.errorAction.tooltip,
+					}),
+				})
+				else nil,
+
 			Layout = e("UIListLayout", {
 				HorizontalAlignment = Enum.HorizontalAlignment.Right,
 				FillDirection = Enum.FillDirection.Horizontal,
 				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 10),
 			}),
 		}),
 
@@ -169,6 +184,7 @@ function ErrorPage.getDerivedStateFromProps(props)
 
 	return {
 		errorMessage = props.errorMessage,
+		errorAction = props.errorAction,
 	}
 end
 

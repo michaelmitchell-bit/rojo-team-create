@@ -203,6 +203,10 @@ impl ServeSession {
         self.root_project.blocked_place_ids.as_ref()
     }
 
+    pub fn team_sync(&self) -> bool {
+        self.root_project.team_sync
+    }
+
     pub fn serve_address(&self) -> Option<IpAddr> {
         self.root_project.serve_address
     }

@@ -164,8 +164,10 @@ impl TestServeSession {
         panic!("Rojo server did not respond after {} tries.", MAX_TRIES);
     }
 
+    /// Fetches `/api/rojo` the way the plugin does, announcing team sync
+    /// support so projects with `teamSync` enabled answer too.
     pub fn get_api_rojo(&self) -> Result<ServerInfoResponse, reqwest::Error> {
-        let url = format!("http://localhost:{}/api/rojo", self.port);
+        let url = format!("http://localhost:{}/api/rojo?teamSync=1", self.port);
         let body = reqwest::blocking::get(url)?.bytes()?;
 
         Ok(deserialize_msgpack(&body).expect("Server returned malformed response"))

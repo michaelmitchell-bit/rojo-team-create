@@ -91,6 +91,13 @@ pub struct Project {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked_place_ids: Option<HashSet<u64>>,
 
+    /// Turns on team sync for places shared by several people. The Studio
+    /// plugin logs which instances each sync changed, and refuses to sync over
+    /// someone else's changes until they are reconciled locally. Plugins
+    /// without team sync support are refused.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub team_sync: bool,
+
     /// If specified, sets the current place's place ID when connecting to the
     /// Rojo server from Roblox Studio.
     #[serde(skip_serializing_if = "Option::is_none")]

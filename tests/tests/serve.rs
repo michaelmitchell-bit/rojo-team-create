@@ -81,6 +81,22 @@ fn allows_api_open_from_loopback_peer() {
 }
 
 #[test]
+fn team_sync_refuses_plugins_without_support() {
+    run_serve_test("team_sync", |session, _redactions| {
+        // The team sync plugin announces itself and is told team sync is on.
+        let info = session.get_api_rojo().unwrap();
+        assert!(info.team_sync);
+
+        // A plugin that doesn't announce team sync is refused with a readable
+        // plain-text reason, since it would sync without checking the place.
+        let response = session.api_rojo_response_with_headers(&[]);
+        assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+        let body = response.text().expect("Failed to read response body");
+        assert!(body.contains("team sync"), "unexpected body: {body}");
+    });
+}
+
+#[test]
 fn empty() {
     run_serve_test("empty", |session, mut redactions| {
         let info = session.get_api_rojo().unwrap();

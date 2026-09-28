@@ -141,7 +141,8 @@ function ApiContext:setMessageCursor(index)
 end
 
 function ApiContext:connect()
-	local url = ("%s/api/rojo"):format(self.__baseUrl)
+	-- Announces team sync support; servers with team sync refuse plugins that don't.
+	local url = ("%s/api/rojo?teamSync=1"):format(self.__baseUrl)
 
 	return Http.get(url)
 		:andThen(rejectFailedRequests)

@@ -41,6 +41,7 @@ local ApiInfoResponse = t.interface({
 	protocolVersion = t.number,
 	expectedPlaceIds = t.optional(t.array(t.number)),
 	rootInstanceId = RbxId,
+	teamSync = t.optional(t.boolean),
 })
 
 local ApiReadResponse = t.interface({

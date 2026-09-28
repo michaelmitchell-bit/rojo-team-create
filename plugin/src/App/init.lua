@@ -600,7 +600,32 @@ function App:useRunningConnectionInfo()
 	self.setPort(port)
 end
 
-function App:startSession()
+--[=[
+	Button offered on the error page when team sync stops a session, or nil.
+]=]
+function App:teamSyncErrorAction(stop: string?)
+	if stop == "blocked" then
+		return {
+			text = "Sync anyway",
+			tooltip = "Overwrite their changes with yours. Only do this if you've already merged them into your files.",
+			onClick = function()
+				self:startSession({ forceTeamSync = true })
+			end,
+		}
+	elseif stop == "superseded" then
+		return {
+			text = "Reconnect",
+			tooltip = "Check again whether you need to get their changes first",
+			onClick = function()
+				self:startSession()
+			end,
+		}
+	end
+
+	return nil
+end
+
+function App:startSession(options: { forceTeamSync: boolean? }?)
 	local claimedLock, priorOwner = self:claimSyncLock()
 	if not claimedLock then
 		local msg = string.format("Could not sync because user '%s' is already syncing", tostring(priorOwner))
@@ -613,6 +638,7 @@ function App:startSession()
 		self:setState({
 			appStatus = AppStatus.Error,
 			errorMessage = msg,
+			errorAction = Roact.None,
 			toolbarIcon = Assets.Images.PluginButtonWarning,
 		})
 
@@ -629,6 +655,7 @@ function App:startSession()
 	local serveSession = ServeSession.new({
 		apiContext = apiContext,
 		twoWaySync = Settings:get("twoWaySync"),
+		forceTeamSync = options ~= nil and options.forceTeamSync == true,
 	})
 
 	serveSession:setUpdateLoadingTextCallback(function(text: string)
@@ -716,13 +743,17 @@ function App:startSession()
 			if details ~= nil then
 				Log.warn("Disconnected from an error: {}", details)
 
+				local teamSyncStop = serveSession:getTeamSyncStop()
 				self:setState({
 					appStatus = AppStatus.Error,
 					errorMessage = tostring(details),
+					errorAction = self:teamSyncErrorAction(teamSyncStop) or Roact.None,
 					toolbarIcon = Assets.Images.PluginButtonWarning,
 				})
 				self:addNotification({
-					text = tostring(details),
+					text = if teamSyncStop
+						then "Rojo team sync stopped syncing. Open the Rojo panel for details."
+						else tostring(details),
 					timeout = 10,
 				})
 			else
@@ -968,6 +999,7 @@ function App:render()
 
 					Error = createPageElement(AppStatus.Error, {
 						errorMessage = self.state.errorMessage,
+						errorAction = self.state.errorAction,
 
 						onClose = function()
 							self:setState({
@@ -1040,8 +1072,8 @@ function App:render()
 				name = pluginName,
 			}, {
 				button = e(StudioToggleButton, {
-					name = "Rojo",
-					tooltip = "Show or hide the Rojo panel",
+					name = "Rojo Team",
+					tooltip = "Show or hide the Rojo panel (team sync build)",
 					icon = self.state.toolbarIcon,
 					active = self.state.guiEnabled,
 					enabled = true,

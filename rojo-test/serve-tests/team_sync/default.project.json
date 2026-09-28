@@ -1,0 +1,7 @@
+{
+  "name": "team_sync",
+  "teamSync": true,
+  "tree": {
+    "$className": "Folder"
+  }
+}

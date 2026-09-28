@@ -22,7 +22,7 @@ use crate::{
             WriteRequest, WriteResponse, PROTOCOL_VERSION, SERVER_VERSION,
         },
         origin::canonical,
-        util::{deserialize_msgpack, msgpack, msgpack_ok, serialize_msgpack},
+        util::{deserialize_msgpack, msgpack, msgpack_ok, response, serialize_msgpack},
     },
     web_api::{
         InstanceUpdate, RefPatchRequest, RefPatchResponse, SerializeRequest, SerializeResponse,
@@ -37,7 +37,7 @@ pub async fn call(
     let service = ApiService::new(serve_session, remote_addr);
 
     match (request.method(), request.uri().path()) {
-        (&Method::GET, "/api/rojo") => service.handle_api_rojo().await,
+        (&Method::GET, "/api/rojo") => service.handle_api_rojo(&request).await,
         (&Method::GET, path) if path.starts_with("/api/read/") => {
             service.handle_api_read(request).await
         }
@@ -82,7 +82,22 @@ impl ApiService {
     }
 
     /// Get a summary of information about the server
-    async fn handle_api_rojo(&self) -> Response<Body> {
+    async fn handle_api_rojo(&self, request: &Request<Body>) -> Response<Body> {
+        let team_sync = self.serve_session.team_sync();
+
+        // Plugins without team sync would sync without checking the place's
+        // sync log, so they are turned away. The plugin shows this body verbatim,
+        // which is why it's plain text rather than msgpack.
+        if team_sync && query_param(request, "teamSync").as_deref() != Some("1") {
+            return response(
+                StatusCode::FORBIDDEN,
+                "text/plain; charset=utf-8",
+                "This project uses team sync, and this Rojo plugin doesn't support it.\n\
+                 Install the matching plugin with `rojo plugin install`, restart Studio, \
+                 and remove any other Rojo plugin.",
+            );
+        }
+
         let tree = self.serve_session.tree();
         let root_instance_id = tree.get_root_id();
 
@@ -96,6 +111,7 @@ impl ApiService {
             place_id: self.serve_session.place_id(),
             game_id: self.serve_session.game_id(),
             root_instance_id,
+            team_sync,
         })
     }
 
@@ -454,6 +470,15 @@ impl ApiService {
             session_id: self.serve_session.session_id(),
         })
     }
+}
+
+/// Reads one `key=value` pair from the query string. Values are only ever
+/// simple flags, so no percent-decoding is needed.
+fn query_param(request: &Request<Body>, key: &str) -> Option<String> {
+    request.uri().query()?.split('&').find_map(|pair| {
+        let (name, value) = pair.split_once('=')?;
+        (name == key).then(|| value.to_owned())
+    })
 }
 
 /// If this instance is represented by a script, try to find the correct .lua or .luau
