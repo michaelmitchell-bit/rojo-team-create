@@ -8,6 +8,7 @@ You're done when:
 - `rojo --version`, in a new terminal inside the project, prints the version pinned in
   `rokit.toml` (it ends in `-team.N`).
 - `rojo serve` starts, and a plain request to it is refused (step 6).
+- Everyone on the team is on the same version (the one in `rokit.toml`). Update together.
 - Studio shows a blue **Rojo Team** toolbar button, and no red Rojo button.
 
 ## If you're an agent
@@ -62,7 +63,7 @@ In the project's `rokit.toml` (create it with `rokit init` if needed), replace a
 existing `rojo` line with:
 
 ```toml
-rojo = "michaelmitchell-bit/rojo-team-create@7.7.0-team.3"
+rojo = "michaelmitchell-bit/rojo-team-create@7.7.0-team.4"
 ```
 
 Use the [latest release](https://github.com/michaelmitchell-bit/rojo-team-create/releases/latest)
@@ -155,7 +156,7 @@ Finally, open the place in Studio, click the blue **Rojo Team** button, and conn
 | Studio: "this Rojo plugin doesn't support team sync" | Stock or marketplace plugin | Step 5, then restart Studio |
 | `tool has not been marked as trusted` | rokit's approval prompt | `rokit trust ...` in step 3 |
 | Plugin still red after installing | Studio wasn't restarted, or the marketplace plugin is still there | Restart Studio, remove the marketplace plugin |
-| "Rojo team sync stopped this sync" | Not a setup problem: someone else changed the same scripts | Pull their changes and reconnect. See [docs/team-sync.md](docs/team-sync.md) |
+| "Holding back changes that would overwrite someone else's work" | Not a setup problem: someone else changed the same scripts | Pull their changes, or merge and press Sync anyway. See [docs/team-sync.md](docs/team-sync.md) |
 
 ## Updating
 

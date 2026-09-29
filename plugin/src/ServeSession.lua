@@ -64,19 +64,7 @@ ServeSession.Status = Status
 local validateServeOptions = t.strictInterface({
 	apiContext = t.table,
 	twoWaySync = t.boolean,
-	forceTeamSync = t.optional(t.boolean),
 })
-
--- How often a connected session checks whether someone else synced over it.
-local TEAM_SYNC_POLL_SECONDS = 1
-
-local function supersededMessage(newer)
-	return string.format(
-		"%s synced into this place while you were connected, so Rojo stopped syncing to avoid overwriting their changes."
-			.. "\nReconnect to check whether you need to get their changes first.",
-		newer.name
-	)
-end
 
 function ServeSession.new(options)
 	assert(validateServeOptions(options))
@@ -122,9 +110,10 @@ function ServeSession.new(options)
 		__precommitCallbacks = {},
 		__postcommitCallbacks = {},
 		__updateLoadingText = function() end,
-		__forceTeamSync = options.forceTeamSync == true,
-		__teamSyncSession = nil,
-		__teamSyncStop = nil,
+		__rootInstanceId = nil,
+		__teamSync = nil,
+		__teamSyncHeldCallback = nil,
+		__teamSyncMisconfigured = false,
 	}
 
 	setmetatable(self, ServeSession)
@@ -164,13 +153,56 @@ function ServeSession:setLoadingText(text: string)
 end
 
 --[=[
-	Why team sync stopped this session, if it did: "blocked" when connecting
-	would overwrite someone else's changes (the user may override), "superseded"
-	when someone else synced while connected (reconnecting re-checks), or
-	"misconfigured" when the served project doesn't use team sync but the place does.
+	Whether this session is using team sync.
 ]=]
-function ServeSession:getTeamSyncStop(): string?
-	return self.__teamSyncStop
+function ServeSession:isTeamSync(): boolean
+	return self.__teamSync ~= nil
+end
+
+--[=[
+	True if the session stopped because the place uses team sync but the
+	project being served doesn't.
+]=]
+function ServeSession:isTeamSyncMisconfigured(): boolean
+	return self.__teamSyncMisconfigured
+end
+
+--[=[
+	Called with (newlyHeld, allHeld) conflict lists whenever team sync holds
+	back changes that would overwrite someone else's work, or releases them.
+]=]
+function ServeSession:onTeamSyncHeld(callback)
+	self.__teamSyncHeldCallback = callback
+end
+
+function ServeSession:__reportHeld(newlyHeld)
+	if self.__teamSyncHeldCallback then
+		self.__teamSyncHeldCallback(newlyHeld, self.__teamSync:heldConflicts())
+	end
+end
+
+--[=[
+	Syncs everything team sync is holding back, overwriting the other changes.
+	For when the user has already merged those changes into their files.
+]=]
+function ServeSession:syncHeld()
+	if self.__teamSync == nil or self.__status ~= Status.Connected then
+		return Promise.resolve()
+	end
+
+	return self.__apiContext:read({ self.__rootInstanceId }):andThen(function(body)
+		self.__reconciler:hydrate(body.instances, self.__rootInstanceId, game)
+		local ok, patch = self.__reconciler:diff(body.instances, self.__rootInstanceId)
+		if not ok then
+			return Promise.reject("Could not compare the place with the Rojo server")
+		end
+
+		TeamSync.protectStore(patch)
+		local selected, changes = self.__teamSync:takeHeld(patch)
+		self:__applyPatch(selected, {})
+		self.__teamSync:record(changes, true)
+		self:__reportHeld({})
+	end)
 end
 
 --[=[
@@ -222,12 +254,12 @@ function ServeSession:start()
 	self.__apiContext
 		:connect()
 		:andThen(function(serverInfo)
+			self.__rootInstanceId = serverInfo.rootInstanceId
 			self:setLoadingText("Loading initial data from server...")
 			return self:__initialSync(serverInfo):andThen(function()
 				self:setLoadingText("Starting sync loop...")
 				self:__setStatus(Status.Connected, serverInfo.projectName)
 				self:__applyGameAndPlaceId(serverInfo)
-				self:__watchTeamSync()
 
 				return self.__apiContext:connectWebSocket({
 					["messages"] = function(messagesPacket)
@@ -238,9 +270,6 @@ function ServeSession:start()
 						Log.debug("Received {} messages from Rojo server", #messagesPacket.messages)
 
 						for _, message in messagesPacket.messages do
-							if self.__status == Status.Disconnected then
-								return
-							end
 							self:__applyPatch(message)
 						end
 						self.__apiContext:setMessageCursor(messagesPacket.messageCursor)
@@ -257,31 +286,6 @@ end
 
 function ServeSession:stop()
 	self:__stopInternal()
-end
-
-function ServeSession:__watchTeamSync()
-	if self.__teamSyncSession == nil then
-		return
-	end
-
-	task.spawn(function()
-		while self.__status == Status.Connected do
-			local newer = self.__teamSyncSession:supersededBy()
-			if newer then
-				self:__stopForTeamSync("superseded", supersededMessage(newer))
-				return
-			end
-			task.wait(TEAM_SYNC_POLL_SECONDS)
-		end
-	end)
-end
-
-function ServeSession:__stopForTeamSync(kind: string, message: string)
-	if self.__status == Status.Disconnected then
-		return
-	end
-	self.__teamSyncStop = kind
-	self:__stopInternal(message)
 end
 
 function ServeSession:__applyGameAndPlaceId(serverInfo)
@@ -459,12 +463,17 @@ function ServeSession:__replaceInstances(idList)
 	end
 end
 
-function ServeSession:__applyPatch(patch)
-	if self.__teamSyncSession then
-		local newer = self.__teamSyncSession:supersededBy()
-		if newer then
-			self:__stopForTeamSync("superseded", supersededMessage(newer))
-			return
+--[=[
+	Applies a patch from the server. With team sync, anything that would
+	overwrite another person's changes is held back first; pass
+	`teamSyncChanges` when the patch has already been through that.
+]=]
+function ServeSession:__applyPatch(patch, teamSyncChanges)
+	if self.__teamSync and teamSyncChanges == nil then
+		local newlyHeld
+		patch, teamSyncChanges, newlyHeld = self.__teamSync:filter(patch, false)
+		if #newlyHeld > 0 then
+			self:__reportHeld(newlyHeld)
 		end
 	end
 
@@ -485,9 +494,6 @@ function ServeSession:__applyPatch(patch)
 		end
 	end
 	Timer.stop()
-
-	-- Paths have to be read before the patch removes or renames anything.
-	local teamSyncChanges = if self.__teamSyncSession then TeamSync.changesFromPatch(patch, self.__instanceMap) else nil
 
 	local patchApplySuccess, unappliedPatch = pcall(self.__reconciler.applyPatch, self.__reconciler, patch)
 	if not patchApplySuccess then
@@ -549,53 +555,36 @@ function ServeSession:__applyPatch(patch)
 		ChangeHistoryService:FinishRecording(historyRecording, Enum.FinishRecordingOperation.Commit)
 	end
 
-	if teamSyncChanges then
-		self:__recordTeamSync(teamSyncChanges)
-	end
-end
-
-function ServeSession:__recordTeamSync(changes)
-	local newer = self.__teamSyncSession:record(changes)
-	if newer then
-		-- Someone synced between our check and this write. Stop so nothing
-		-- further overwrites their work.
-		task.defer(function()
-			self:__stopForTeamSync("superseded", supersededMessage(newer))
-		end)
+	if self.__teamSync and teamSyncChanges then
+		self.__teamSync:record(teamSyncChanges)
 	end
 end
 
 --[=[
-	Applies team sync's rules to the catch-up patch. Returns why the sync must
-	not go ahead, or nil after starting to log this session.
+	Sets up team sync for this session. Returns the part of the catch-up patch
+	that can be applied and the changes it makes, or a reason the session
+	can't continue as the third value.
 ]=]
-function ServeSession:__checkTeamSync(serverInfo, catchUpPatch): string?
-	local teamSync = serverInfo.teamSync == true
-	if not teamSync and TeamSync.readLog() == nil then
-		return nil
+function ServeSession:__startTeamSync(serverInfo, catchUpPatch)
+	if serverInfo.teamSync ~= true then
+		if TeamSync.placeUsesTeamSync() then
+			self.__teamSyncMisconfigured = true
+			return nil,
+				nil,
+				"This place uses Rojo team sync, but the project being served doesn't."
+					.. '\nAdd "teamSync": true to the project file (or serve the project that has it) and reconnect.'
+		end
+		return catchUpPatch, {}, nil
 	end
 
 	TeamSync.protectStore(catchUpPatch)
+	self.__teamSync = TeamSync.newSession(self.__instanceMap, self.__reconciler)
 
-	local changes = TeamSync.changesFromPatch(catchUpPatch, self.__instanceMap)
-	local decision = TeamSync.check(teamSync, changes, self.__forceTeamSync)
-
-	if not decision.allowed then
-		self.__teamSyncStop = if decision.canForce then "blocked" else "misconfigured"
-		return decision.reason
+	local toApply, changes, newlyHeld = self.__teamSync:filter(catchUpPatch, true)
+	if #newlyHeld > 0 then
+		self:__reportHeld(newlyHeld)
 	end
-
-	if teamSync then
-		if decision.forced then
-			Log.warn(
-				"Rojo team sync: overriding changes by others to:\n{}",
-				TeamSync.Policy.describeConflicts(decision.conflicts, os.time())
-			)
-		end
-		self.__teamSyncSession = TeamSync.newSession(decision)
-	end
-
-	return nil
+	return toApply, changes, nil
 end
 
 function ServeSession:__initialSync(serverInfo)
@@ -636,10 +625,11 @@ function ServeSession:__initialSync(serverInfo)
 
 		Log.trace("Computed hydration patch: {:#?}", debugPatch(catchUpPatch))
 
-		local teamSyncRefusal = self:__checkTeamSync(serverInfo, catchUpPatch)
+		local teamSyncPatch, teamSyncChanges, teamSyncRefusal = self:__startTeamSync(serverInfo, catchUpPatch)
 		if teamSyncRefusal then
 			return Promise.reject(teamSyncRefusal)
 		end
+		catchUpPatch = teamSyncPatch
 
 		local userDecision = "Accept"
 		if self.__userConfirmCallback ~= nil then
@@ -677,15 +667,9 @@ function ServeSession:__initialSync(serverInfo)
 				table.insert(inversePatch.removed, id)
 			end
 
-			return self.__apiContext:write(inversePatch):andThen(function()
-				-- The place kept its content and the files were changed to
-				-- match it, so this session changed nothing in the place yet.
-				if self.__teamSyncSession then
-					self:__recordTeamSync({})
-				end
-			end)
+			return self.__apiContext:write(inversePatch)
 		elseif userDecision == "Accept" then
-			self:__applyPatch(catchUpPatch)
+			self:__applyPatch(catchUpPatch, teamSyncChanges)
 			return Promise.resolve()
 		else
 			return Promise.reject("Invalid user decision: " .. userDecision)

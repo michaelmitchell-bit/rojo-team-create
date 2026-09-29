@@ -29,6 +29,13 @@ Making a new release? Simply add the new header with the version and date undern
 ```
 -->
 
+## 7.7.0-team.4 (Rojo Team Create)
+
+* Several people can now be connected to the same place at once. Rojo's one-at-a-time session lock is skipped for places that use team sync.
+* Instead of refusing the whole sync, only changes that would overwrite someone else's work are held back. Everything else syncs live, and held changes clear once your files match. "Sync anyway" syncs whatever is held.
+* Each machine keeps its own log in `ServerStorage.RojoTeamSync` (now a Folder), so simultaneous syncs can't erase each other's records. Logs from team.3 and earlier are replaced on first sync.
+* Adding a script someone else already synced matches it up instead of creating a duplicate.
+
 ## 7.7.0-team.3 (Rojo Team Create)
 
 * Added team sync. Set `"teamSync": true` in a project and the plugin keeps a log in the place of what each sync changed, and won't sync over someone else's changes until you've pulled them in. See [docs/team-sync.md](docs/team-sync.md).

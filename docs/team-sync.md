@@ -1,7 +1,8 @@
 # Team sync
 
-Team sync stops people who share a place from overwriting each other's synced
-changes. This page covers how it decides, and where it's strict on purpose.
+Team sync lets several people stay connected to the same place and sync at the same
+time, without anyone's sync overwriting someone else's changes. This page covers how
+it decides what to hold back, and where it's strict on purpose.
 
 ## Turning it on
 
@@ -14,78 +15,83 @@ rojo plugin install
 
 Restart Studio after installing, and remove any other Rojo plugin. This build's
 plugin is blue, with a toolbar button called "Rojo Team", so it's easy to spot a
-stock (red) Rojo plugin that's still around.
+stock (red) Rojo plugin that's still around. Everyone should be on the same version.
 
-## The sync log
+## What gets stored in the place
 
-Every place that's been synced with team sync has a StringValue at
-`ServerStorage.RojoTeamSync` holding a small JSON log. Each sync session adds one
-entry: who synced, when, and which instances that session changed. The plugin
-also remembers, per machine, the last entry you wrote. That's your "base".
+`ServerStorage.RojoTeamSync` is a Folder with one StringValue per machine that has
+synced. Each one holds that machine's write log: the instance paths it synced, each
+stamped with that machine's own counter. A plugin only ever writes its own value, so
+two people syncing at the same moment can't erase each other's records.
 
-It keeps the last 40 sessions. Older entries get dropped, and the log remembers
-that it was trimmed.
+A log keeps the most recent 500 paths. When older ones are dropped, the log
+remembers the highest counter it dropped (its "floor").
 
-## Deciding whether to sync
+Your plugin also remembers, in your local plugin settings, how far into each other
+machine's log you've caught up.
 
-When you connect, Rojo computes the patch it needs to apply to bring the place in
-line with your files. Team sync turns that patch into a list of instance paths and
-compares it with every log entry written after your base:
+## Deciding what to hold back
 
-| Situation | Result |
-|---|---|
-| Nobody else synced since you did | Sync |
-| Others synced, but nothing overlaps with what you'd change | Sync |
-| You already have their changes exactly | Sync (those instances aren't in your patch at all) |
-| Your patch would change something someone else changed | Refused |
+Every change Rojo wants to make in the place, whether from the catch-up sync when you
+connect or from a file you just saved, goes through the same check. If it would touch
+an instance another machine wrote that you haven't caught up to, it's held back. Your
+copy is probably older than theirs. Anything that doesn't overlap is applied as usual.
 
-When it refuses, the Rojo panel lists the instances and who changed each one. Get
-their changes into your files, then reconnect. If you merged their changes by hand
-(so your version deliberately differs from theirs), press **Sync anyway**. The
-override is written to the log like any other sync.
+You catch up on something someone else wrote when:
 
-While you're connected, the plugin checks the log about once a second. As soon as
-someone else's entry shows up after yours, it stops syncing for you. Reconnect to
-re-check.
+- your version turns out to be identical to what's in the place (you pulled their
+  change, or it came in some other way), or
+- you press **Sync anyway** and deliberately sync over it, or
+- you connect and your catch-up sync doesn't touch it at all, which means your files
+  already match.
+
+When changes are held, the plugin shows which instances and who changed them, and the
+toolbar button shows a warning until they clear. The warning is also written to the
+output. Held changes clear on their own once your files match. If you merged by hand,
+so your version deliberately differs, press **Sync anyway** in the notification, or run
+the "Rojo: Sync held team changes anyway" plugin action.
+
+If someone else already synced a script you're adding (you both pulled the same new
+file), Rojo matches it up with the one in the place instead of creating a duplicate.
 
 ## What counts as overlapping
 
 - The same instance, e.g. `ServerScriptService.Main` in both.
-- Anything inside a subtree that was added, removed or renamed, in either
-  direction. If you'd delete a folder and someone else edited a script inside it,
-  that overlaps.
-- A plain property change on a folder doesn't overlap with edits to things inside
-  it.
-- A session that changed more than 50 instances is logged as "changed everything",
-  so it overlaps with anything until people reconcile.
+- Anything inside a subtree that was added, removed or renamed, in either direction.
+  If you'd delete a folder and someone else edited a script inside it, that overlaps.
+- A plain property change on a folder doesn't overlap with edits to things inside it.
 
 ## Where it's strict on purpose
 
-- The stock Rojo plugin can't connect to a server that has `teamSync` on (it gets
-  an HTTP 403 with an explanation).
-- A project without `teamSync` can't sync into a place that has a sync log. There's
+- The stock Rojo plugin can't connect to a server that has `teamSync` on (it gets an
+  HTTP 403 with an explanation).
+- A project without `teamSync` can't sync into a place that has team sync logs. There's
   no override for this one; serve the right project.
-- If you've never synced a place from your machine, every entry in the log counts
-  against you. If the log has also been trimmed, every change you'd make counts as a
-  conflict, because there's history it can't see.
-- A log that can't be parsed is treated as unknown history, same as above.
+- If another machine dropped writes you never caught up on, you can't know what they
+  touched, so every change you make is held against that machine until you connect
+  with nothing held.
+- A log that can't be parsed is treated the same way.
 
 ## Known gaps
 
-- The log lives in the place, so anyone can edit or delete
-  `ServerStorage.RojoTeamSync`. Deleting it resets team sync for that place.
-- Paths use instance names, so siblings with the same name are treated as one
-  instance. That only ever causes extra refusals.
+- Two people saving the same script within about a second of each other can both get
+  through before either log reaches the other, and the last save wins.
+- The logs live in the place, so anyone can edit or delete `ServerStorage.RojoTeamSync`.
+  Deleting it resets team sync for that place.
+- Paths use instance names, so siblings with the same name are treated as one instance.
+  That only ever causes extra holds.
 - Edits made directly in Studio aren't logged. Rojo overwrites them the same way it
   always has.
-- A stock Rojo server with a stock plugin knows nothing about any of this. Make sure
-  everyone is on this build.
+- A stock Rojo server with a stock plugin knows nothing about any of this.
 
 ## Tests
 
 The decision rules are plain Luau with no Roblox dependencies
-(`plugin/src/TeamSync/Policy.lua`). Run their specs without Studio:
+(`plugin/src/TeamSync/Policy.lua`). The second script runs two copies of the real
+plugin code against one shared place, the way two people in Team Create would be. Both
+run under [Lune](https://github.com/lune-org/lune), without Studio:
 
 ```sh
 lune run scripts/test-team-sync-policy.luau
+lune run scripts/test-team-sync-plugin.luau
 ```

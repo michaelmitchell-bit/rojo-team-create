@@ -1,19 +1,16 @@
 --[[
 	Team sync rules, kept free of Roblox APIs so they can be tested anywhere.
 
-	A shared place carries a sync log: one entry per sync session, listing the
-	instance paths that session changed. Each person remembers the last entry
-	they wrote (their "base"). Before syncing, their catch-up patch is turned into
-	a list of changes and compared with every entry written since their base:
+	Several people can be connected to the same place at once. Each machine
+	keeps its own write log in the place: the instance paths it synced, each
+	stamped with that machine's own counter. Separate logs mean two people
+	syncing at the same moment can't overwrite each other's records.
 
-	- Nothing overlaps: they already have everyone else's changes, or only touch
-	  instances nobody else did. The sync goes ahead.
-	- Something overlaps: syncing would overwrite someone else's work. The sync
-	  is refused until they reconcile it through their own workflow (version
-	  control, shared drive, whatever) and reconnect, or explicitly override.
-
-	No version control is assumed. If someone has pulled in another person's
-	change exactly, that instance simply doesn't appear in their patch.
+	Every machine also remembers, per other machine, how far into that
+	machine's writes it has caught up ("acks"). A change is held back when it
+	touches something another machine wrote that we haven't caught up to, since
+	applying it would overwrite their work. We catch up on a path when our files
+	turn out to match what they synced, or when we deliberately sync over it.
 ]]
 
 export type Change = {
@@ -22,46 +19,46 @@ export type Change = {
 	tree: boolean,
 }
 
-export type Entry = {
-	id: string,
-	userId: number,
-	name: string,
+export type Write = {
+	c: number,
+	tree: boolean,
 	at: number,
-	-- The session changed more than MAX_CHANGES instances; treat it as having
-	-- changed everything.
-	all: boolean?,
-	forced: boolean?,
-	changes: { Change },
 }
 
-export type Log = {
+export type MachineLog = {
 	version: number,
-	logId: string,
-	-- Older entries were dropped, so a base missing from the log can't be
-	-- trusted to mean "nothing happened since".
-	truncated: boolean,
-	entries: { Entry },
+	machine: string,
+	userId: number,
+	name: string,
+	counter: number,
+	-- Highest counter among writes dropped to keep the log small.
+	floor: number,
+	writes: { [string]: Write },
 }
+
+export type MachineAcks = {
+	-- Every write with a counter at or below this is caught up.
+	all: number,
+	paths: { [string]: number },
+}
+
+export type Acks = { [string]: MachineAcks }
 
 export type Conflict = {
 	path: string,
-	entry: Entry?,
-}
-
-export type Decision = {
-	allowed: boolean,
-	reason: string?,
-	conflicts: { Conflict }?,
-	canForce: boolean,
-	forced: boolean?,
+	machine: string,
+	name: string,
+	at: number?,
+	-- The other machine dropped writes we never caught up on, so we can't tell
+	-- what they touched.
+	unknown: boolean?,
 }
 
 local Policy = {}
 
-Policy.VERSION = 1
-Policy.MAX_ENTRIES = 40
-Policy.MAX_CHANGES = 50
-Policy.MAX_LISTED_CONFLICTS = 12
+Policy.VERSION = 2
+Policy.MAX_WRITES = 500
+Policy.MAX_LISTED = 12
 
 local function isWithin(path: string, ancestor: string): boolean
 	return path == ancestor or string.sub(path, 1, #ancestor + 1) == ancestor .. "."
@@ -79,73 +76,211 @@ function Policy.overlaps(a: Change, b: Change): boolean
 	return (a.tree and isWithin(b.path, a.path)) or (b.tree and isWithin(a.path, b.path))
 end
 
-function Policy.isLog(value: any): boolean
-	return type(value) == "table"
-		and value.version == Policy.VERSION
-		and type(value.logId) == "string"
-		and type(value.entries) == "table"
-end
-
-function Policy.newLog(logId: string): Log
+function Policy.newMachineLog(machine: string, userId: number, name: string): MachineLog
 	return {
 		version = Policy.VERSION,
-		logId = logId,
-		truncated = false,
-		entries = {},
+		machine = machine,
+		userId = userId,
+		name = name,
+		counter = 0,
+		floor = 0,
+		writes = {},
 	}
 end
 
---[[
-	Returns the entries written after `baseId`, and whether that list is known
-	to be complete.
-]]
-function Policy.entriesSince(log: Log, baseId: string?): ({ Entry }, boolean)
-	if baseId ~= nil then
-		for index = #log.entries, 1, -1 do
-			if log.entries[index].id == baseId then
-				return table.move(log.entries, index + 1, #log.entries, 1, {}), true
-			end
-		end
-	end
-
-	-- The base isn't in the log: we've never synced here, or our entry was
-	-- trimmed. Every entry counts, and if the log was trimmed, so does the
-	-- unknown history before it.
-	return table.clone(log.entries), not log.truncated
+function Policy.isMachineLog(value: any): boolean
+	return type(value) == "table"
+		and value.version == Policy.VERSION
+		and type(value.machine) == "string"
+		and type(value.counter) == "number"
+		and type(value.floor) == "number"
+		and type(value.writes) == "table"
 end
 
-function Policy.findConflicts(changes: { Change }, entries: { Entry }, complete: boolean): { Conflict }
+local function machineAcks(acks: Acks, machine: string): MachineAcks
+	return acks[machine] or { all = 0, paths = {} }
+end
+
+function Policy.caughtUpTo(acks: Acks, machine: string, path: string): number
+	local entry = machineAcks(acks, machine)
+	return math.max(entry.all, entry.paths[path] or 0)
+end
+
+local function hasUnknownHistory(log: MachineLog, acks: Acks): boolean
+	return log.floor > machineAcks(acks, log.machine).all
+end
+
+--[[
+	Other machines' writes that `change` would overwrite.
+]]
+function Policy.conflictsFor(change: Change, logs: { MachineLog }, myMachine: string, acks: Acks): { Conflict }
 	local conflicts = {}
 
-	for _, change in changes do
-		local culprit = nil
-		local found = not complete
-
-		for index = #entries, 1, -1 do
-			local entry = entries[index]
-			local hit = entry.all == true
-			if not hit then
-				for _, theirs in entry.changes do
-					if Policy.overlaps(change, theirs) then
-						hit = true
-						break
-					end
-				end
-			end
-
-			if hit then
-				culprit = entry
-				found = true
-				break
-			end
+	for _, log in logs do
+		if log.machine == myMachine then
+			continue
 		end
 
-		if found then
-			table.insert(conflicts, { path = change.path, entry = culprit })
+		if hasUnknownHistory(log, acks) then
+			table.insert(conflicts, { path = change.path, machine = log.machine, name = log.name, unknown = true })
+			continue
+		end
+
+		for path, write in log.writes do
+			if
+				write.c > Policy.caughtUpTo(acks, log.machine, path)
+				and Policy.overlaps(change, { path = path, tree = write.tree })
+			then
+				table.insert(conflicts, { path = path, machine = log.machine, name = log.name, at = write.at })
+			end
 		end
 	end
 
 	return conflicts
+end
+
+--[[
+	Collapses fully caught-up machines back to a single number so acks don't
+	grow without bound.
+]]
+local function compact(entry: MachineAcks, log: MachineLog): MachineAcks
+	if hasUnknownHistory(log, { [log.machine] = entry }) then
+		return entry
+	end
+
+	for path, write in log.writes do
+		if write.c > math.max(entry.all, entry.paths[path] or 0) then
+			return entry
+		end
+	end
+
+	return { all = log.counter, paths = {} }
+end
+
+--[[
+	Marks every other machine's write that overlaps `change` as caught up. Used
+	when our files turn out to match theirs, or when we sync over them on purpose.
+]]
+function Policy.catchUpOn(acks: Acks, logs: { MachineLog }, myMachine: string, change: Change): Acks
+	local updated = table.clone(acks)
+
+	for _, log in logs do
+		if log.machine == myMachine then
+			continue
+		end
+
+		local entry = machineAcks(updated, log.machine)
+		local paths = table.clone(entry.paths)
+		local changed = false
+
+		for path, write in log.writes do
+			if Policy.overlaps(change, { path = path, tree = write.tree }) and write.c > (paths[path] or 0) then
+				paths[path] = write.c
+				changed = true
+			end
+		end
+
+		if changed then
+			updated[log.machine] = compact({ all = entry.all, paths = paths }, log)
+		end
+	end
+
+	return updated
+end
+
+--[[
+	After a full catch-up sync, anything another machine wrote that we're not
+	holding back already matches our files: our sync would have touched it
+	otherwise. Catch up on all of it.
+]]
+function Policy.catchUpExcept(acks: Acks, logs: { MachineLog }, myMachine: string, held: { Change }): Acks
+	local updated = table.clone(acks)
+
+	for _, log in logs do
+		if log.machine == myMachine then
+			continue
+		end
+
+		local entry = machineAcks(updated, log.machine)
+		local paths = table.clone(entry.paths)
+		local blocked = false
+
+		for path, write in log.writes do
+			local isHeld = false
+			for _, change in held do
+				if Policy.overlaps(change, { path = path, tree = write.tree }) then
+					isHeld = true
+					break
+				end
+			end
+
+			if isHeld then
+				blocked = true
+			else
+				paths[path] = write.c
+			end
+		end
+
+		if not blocked and #held == 0 then
+			-- Nothing at all is held, so even writes they dropped must match.
+			updated[log.machine] = { all = log.counter, paths = {} }
+		else
+			updated[log.machine] = compact({ all = entry.all, paths = paths }, log)
+		end
+	end
+
+	return updated
+end
+
+--[[
+	Records a batch of our own changes in our log.
+]]
+function Policy.recordWrites(log: MachineLog, changes: { Change }, now: number): MachineLog
+	if #changes == 0 then
+		return log
+	end
+
+	local counter = log.counter + 1
+	local writes = table.clone(log.writes)
+	for _, change in changes do
+		local existing = writes[change.path]
+		writes[change.path] = {
+			c = counter,
+			tree = change.tree or (existing ~= nil and existing.tree),
+			at = now,
+		}
+	end
+
+	local floor = log.floor
+	local count = 0
+	for _ in writes do
+		count += 1
+	end
+
+	if count > Policy.MAX_WRITES then
+		local ordered = {}
+		for path, write in writes do
+			table.insert(ordered, { path = path, c = write.c })
+		end
+		table.sort(ordered, function(a, b)
+			return a.c < b.c
+		end)
+
+		for index = 1, count - Policy.MAX_WRITES do
+			writes[ordered[index].path] = nil
+			floor = math.max(floor, ordered[index].c)
+		end
+	end
+
+	return {
+		version = log.version,
+		machine = log.machine,
+		userId = log.userId,
+		name = log.name,
+		counter = counter,
+		floor = floor,
+		writes = writes,
+	}
 end
 
 local function elapsedText(seconds: number): string
@@ -159,201 +294,33 @@ local function elapsedText(seconds: number): string
 	return string.format("%d d ago", seconds // 86400)
 end
 
-function Policy.describeConflicts(conflicts: { Conflict }, now: number): string
+--[[
+	One line per held path, naming who changed it.
+]]
+function Policy.describe(conflicts: { Conflict }, now: number): string
 	local lines = {}
+	local seen = {}
 
-	for index, conflict in conflicts do
-		if index > Policy.MAX_LISTED_CONFLICTS then
-			table.insert(lines, string.format("…and %d more", #conflicts - Policy.MAX_LISTED_CONFLICTS))
+	for _, conflict in conflicts do
+		local key = conflict.path .. "\0" .. conflict.machine
+		if seen[key] then
+			continue
+		end
+		seen[key] = true
+
+		if #lines >= Policy.MAX_LISTED then
+			table.insert(lines, "…and more")
 			break
 		end
 
-		local who = if conflict.entry
-			then string.format("%s, %s", conflict.entry.name, elapsedText(now - conflict.entry.at))
-			else "history older than the sync log"
-		table.insert(lines, string.format("• %s (%s)", conflict.path, who))
+		local when = if conflict.unknown
+			then "older changes you haven't seen"
+			elseif conflict.at then elapsedText(now - conflict.at)
+			else "earlier"
+		table.insert(lines, string.format("• %s (%s, %s)", conflict.path, conflict.name, when))
 	end
 
 	return table.concat(lines, "\n")
-end
-
---[[
-	Decides whether a sync may go ahead.
-
-	`log` is the place's sync log (nil if it has none), `baseId` the last entry
-	this person wrote to it, `changes` what their catch-up patch would change.
-]]
-function Policy.evaluate(options: {
-	teamSync: boolean,
-	log: Log?,
-	baseId: string?,
-	changes: { Change },
-	force: boolean,
-	now: number,
-}): Decision
-	local log = options.log
-
-	if not options.teamSync then
-		if log == nil or #log.entries == 0 then
-			return { allowed = true, canForce = false }
-		end
-
-		return {
-			allowed = false,
-			canForce = false,
-			reason = "This place uses Rojo team sync, but the project being served doesn't."
-				.. '\nAdd "teamSync": true to the project file (or serve the project that has it) and reconnect.',
-		}
-	end
-
-	if log == nil or #log.entries == 0 then
-		return { allowed = true, canForce = false }
-	end
-
-	local entries, complete = Policy.entriesSince(log, options.baseId)
-	if complete and #entries == 0 then
-		return { allowed = true, canForce = false }
-	end
-
-	local conflicts = Policy.findConflicts(options.changes, entries, complete)
-	if #conflicts == 0 then
-		return { allowed = true, canForce = false }
-	end
-
-	if options.force then
-		return { allowed = true, canForce = false, forced = true, conflicts = conflicts }
-	end
-
-	return {
-		allowed = false,
-		canForce = true,
-		conflicts = conflicts,
-		reason = "Rojo team sync stopped this sync: it would overwrite changes someone else synced into this place.\n\n"
-			.. Policy.describeConflicts(conflicts, options.now)
-			.. "\n\nGet their changes into your files (however your team shares code), then reconnect."
-			.. "\nIf you've already merged them by hand, choose Sync anyway.",
-	}
-end
-
---[[
-	Folds new changes into a list, dropping duplicates and anything already
-	covered by a subtree change.
-]]
-function Policy.mergeChanges(existing: { Change }, incoming: { Change }): { Change }
-	local merged = table.clone(existing)
-
-	for _, change in incoming do
-		local covered = false
-		for index = #merged, 1, -1 do
-			local other = merged[index]
-			local sameOrWider = other.path == change.path and (other.tree or not change.tree)
-			if sameOrWider or (other.tree and isWithin(change.path, other.path)) then
-				covered = true
-				break
-			elseif change.tree and isWithin(other.path, change.path) then
-				table.remove(merged, index)
-			end
-		end
-
-		if not covered then
-			table.insert(merged, change)
-		end
-	end
-
-	return merged
-end
-
---[[
-	Adds a session's latest changes to its log entry. Past MAX_CHANGES the entry
-	stops listing paths and counts as having changed everything.
-]]
-function Policy.recordChanges(entry: Entry, changes: { Change }, now: number): Entry
-	local updated = table.clone(entry)
-	updated.at = now
-
-	if entry.all then
-		return updated
-	end
-
-	local merged = Policy.mergeChanges(entry.changes, changes)
-	if #merged > Policy.MAX_CHANGES then
-		updated.all = true
-		updated.changes = {}
-	else
-		updated.changes = merged
-	end
-
-	return updated
-end
-
---[[
-	Adds `entry` to the end of the log, or replaces it if it's already the last
-	entry. Trims the oldest entries past MAX_ENTRIES.
-]]
-function Policy.withEntry(log: Log, entry: Entry): Log
-	local entries = table.clone(log.entries)
-	local last = entries[#entries]
-
-	if last ~= nil and last.id == entry.id then
-		entries[#entries] = entry
-	else
-		table.insert(entries, entry)
-	end
-
-	local truncated = log.truncated
-	while #entries > Policy.MAX_ENTRIES do
-		table.remove(entries, 1)
-		truncated = true
-	end
-
-	return {
-		version = log.version,
-		logId = log.logId,
-		truncated = truncated,
-		entries = entries,
-	}
-end
-
---[[
-	Drops the oldest entries until `encode(log)` fits in `maxLength`.
-]]
-function Policy.fitToLength(log: Log, maxLength: number, encode: (Log) -> string): (Log, string)
-	local encoded = encode(log)
-
-	while #encoded > maxLength and #log.entries > 1 do
-		local entries = table.clone(log.entries)
-		table.remove(entries, 1)
-		log = {
-			version = log.version,
-			logId = log.logId,
-			truncated = true,
-			entries = entries,
-		}
-		encoded = encode(log)
-	end
-
-	return log, encoded
-end
-
---[[
-	Returns the first entry written after ours by someone else's session, if
-	any: our view of the place is stale and we have to stop syncing.
-]]
-function Policy.supersededBy(log: Log?, entryId: string): Entry?
-	if log == nil then
-		return nil
-	end
-
-	for index = #log.entries, 1, -1 do
-		local entry = log.entries[index]
-		if entry.id == entryId then
-			return log.entries[index + 1]
-		end
-	end
-
-	-- Our entry is gone: either the log was reset or it was trimmed because
-	-- many sessions synced after ours. Either way, someone else synced.
-	return log.entries[#log.entries]
 end
 
 return Policy

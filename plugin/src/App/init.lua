@@ -24,6 +24,7 @@ local PatchTree = require(Plugin.PatchTree)
 local preloadAssets = require(Plugin.preloadAssets)
 local soundPlayer = require(Plugin.soundPlayer)
 local ignorePlaceIds = require(Plugin.ignorePlaceIds)
+local TeamSync = require(Plugin.TeamSync)
 local timeUtil = require(Plugin.timeUtil)
 local Theme = require(script.Theme)
 
@@ -600,33 +601,13 @@ function App:useRunningConnectionInfo()
 	self.setPort(port)
 end
 
---[=[
-	Button offered on the error page when team sync stops a session, or nil.
-]=]
-function App:teamSyncErrorAction(stop: string?)
-	if stop == "blocked" then
-		return {
-			text = "Sync anyway",
-			tooltip = "Overwrite their changes with yours. Only do this if you've already merged them into your files.",
-			onClick = function()
-				self:startSession({ forceTeamSync = true })
-			end,
-		}
-	elseif stop == "superseded" then
-		return {
-			text = "Reconnect",
-			tooltip = "Check again whether you need to get their changes first",
-			onClick = function()
-				self:startSession()
-			end,
-		}
+function App:startSession()
+	-- Team sync lets several people sync into one place at once, so the
+	-- one-at-a-time lock only applies to places that don't use it.
+	local claimedLock, priorOwner = true, nil
+	if not TeamSync.placeUsesTeamSync() then
+		claimedLock, priorOwner = self:claimSyncLock()
 	end
-
-	return nil
-end
-
-function App:startSession(options: { forceTeamSync: boolean? }?)
-	local claimedLock, priorOwner = self:claimSyncLock()
 	if not claimedLock then
 		local msg = string.format("Could not sync because user '%s' is already syncing", tostring(priorOwner))
 
@@ -638,7 +619,6 @@ function App:startSession(options: { forceTeamSync: boolean? }?)
 		self:setState({
 			appStatus = AppStatus.Error,
 			errorMessage = msg,
-			errorAction = Roact.None,
 			toolbarIcon = Assets.Images.PluginButtonWarning,
 		})
 
@@ -655,7 +635,6 @@ function App:startSession(options: { forceTeamSync: boolean? }?)
 	local serveSession = ServeSession.new({
 		apiContext = apiContext,
 		twoWaySync = Settings:get("twoWaySync"),
-		forceTeamSync = options ~= nil and options.forceTeamSync == true,
 	})
 
 	serveSession:setUpdateLoadingTextCallback(function(text: string)
@@ -697,6 +676,43 @@ function App:startSession(options: { forceTeamSync: boolean? }?)
 		end)
 	end)
 
+	serveSession:onTeamSyncHeld(function(newlyHeld, allHeld)
+		self:setState({
+			toolbarIcon = if #allHeld > 0
+				then Assets.Images.PluginButtonWarning
+				else Assets.Images.PluginButtonConnected,
+		})
+
+		if #newlyHeld == 0 then
+			return
+		end
+
+		local message = "Holding back changes that would overwrite someone else's work:\n"
+			.. TeamSync.Policy.describe(newlyHeld, os.time())
+			.. "\n\nGet their changes into your files and these sync on their own."
+			.. " If you've already merged them, choose Sync anyway."
+		Log.warn(message)
+		self:addNotification({
+			text = message,
+			timeout = 30,
+			actions = {
+				SyncAnyway = {
+					text = "Sync anyway",
+					style = "Solid",
+					layoutOrder = 1,
+					onClick = function()
+						self:syncHeldTeamChanges()
+					end,
+				},
+				Dismiss = {
+					text = "Dismiss",
+					style = "Bordered",
+					layoutOrder = 2,
+				},
+			},
+		})
+	end)
+
 	serveSession:onStatusChanged(function(status, details)
 		if status == ServeSession.Status.Connecting then
 			if self.dismissSyncReminder then
@@ -712,6 +728,9 @@ function App:startSession(options: { forceTeamSync: boolean? }?)
 				text = "Connecting to session...",
 			})
 		elseif status == ServeSession.Status.Connected then
+			if serveSession:isTeamSync() then
+				self:releaseSyncLock()
+			end
 			self.knownProjects[details] = true
 			self:setPriorSyncInfo(host, port, details)
 			self:setRunningConnectionInfo(baseUrl)
@@ -743,17 +762,13 @@ function App:startSession(options: { forceTeamSync: boolean? }?)
 			if details ~= nil then
 				Log.warn("Disconnected from an error: {}", details)
 
-				local teamSyncStop = serveSession:getTeamSyncStop()
 				self:setState({
 					appStatus = AppStatus.Error,
 					errorMessage = tostring(details),
-					errorAction = self:teamSyncErrorAction(teamSyncStop) or Roact.None,
 					toolbarIcon = Assets.Images.PluginButtonWarning,
 				})
 				self:addNotification({
-					text = if teamSyncStop
-						then "Rojo team sync stopped syncing. Open the Rojo panel for details."
-						else tostring(details),
+					text = tostring(details),
 					timeout = 10,
 				})
 			else
@@ -858,6 +873,20 @@ function App:startSession(options: { forceTeamSync: boolean? }?)
 	serveSession:start()
 
 	self.serveSession = serveSession
+end
+
+function App:syncHeldTeamChanges()
+	if self.serveSession == nil then
+		return
+	end
+
+	self.serveSession:syncHeld():catch(function(err)
+		Log.warn("Could not sync held team changes: {}", err)
+		self:addNotification({
+			text = "Could not sync the held changes: " .. tostring(err),
+			timeout = 10,
+		})
+	end)
 end
 
 function App:endSession()
@@ -999,7 +1028,6 @@ function App:render()
 
 					Error = createPageElement(AppStatus.Error, {
 						errorMessage = self.state.errorMessage,
-						errorAction = self.state.errorAction,
 
 						onClose = function()
 							self:setState({
@@ -1065,6 +1093,17 @@ function App:render()
 					if self.serveSession ~= nil and self.serveSession:getStatus() == ServeSession.Status.Connected then
 						self:endSession()
 					end
+				end,
+			}),
+
+			syncHeldAction = e(StudioPluginAction, {
+				name = "RojoTeamSyncHeld",
+				title = "Rojo: Sync held team changes anyway",
+				description = "Syncs changes team sync held back because they'd overwrite someone else's work",
+				icon = Assets.Images.PluginButton,
+				bindable = true,
+				onTriggered = function()
+					self:syncHeldTeamChanges()
 				end,
 			}),
 
