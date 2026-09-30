@@ -123,11 +123,15 @@ function TeamSync.readLogs(): { Policy.MachineLog }
 	return logs
 end
 
+--[[
+	Log writes are appended to the sync they describe, so undoing a sync also
+	undoes its record instead of leaving one without the other.
+]]
 local function withRecording(name: string, callback: () -> ())
 	local recording = ChangeHistoryService:TryBeginRecording(name)
 	callback()
 	if recording then
-		ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
+		ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Append)
 	end
 end
 
@@ -485,9 +489,20 @@ function Session:record(changes: { Policy.Change }, forced: boolean?)
 		self:__saveAcks(acks)
 	end
 
-	local log = Policy.recordWrites(self:__myLog(), changes, os.time())
+	-- The counter must never go backwards, even if an undo rolls back our log:
+	-- other machines treat a counter they've seen as already caught up.
+	local log = self:__myLog()
+	local counterKey = "Rojo_teamSyncCounter_" .. tostring(logId())
+	local lastCounter = setting(counterKey)
+	if type(lastCounter) == "number" and lastCounter > log.counter then
+		log = table.clone(log)
+		log.counter = lastCounter
+	end
+
+	log = Policy.recordWrites(log, changes, os.time())
 	log.name = self.__name
 	log.userId = self.__userId
+	setSetting(counterKey, log.counter)
 
 	local encoded = HttpService:JSONEncode(log)
 	while #encoded > MAX_LOG_LENGTH and next(log.writes) ~= nil do

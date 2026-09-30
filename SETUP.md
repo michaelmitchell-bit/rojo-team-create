@@ -63,7 +63,7 @@ In the project's `rokit.toml` (create it with `rokit init` if needed), replace a
 existing `rojo` line with:
 
 ```toml
-rojo = "michaelmitchell-bit/rojo-team-create@7.7.0-team.4"
+rojo = "michaelmitchell-bit/rojo-team-create@7.7.0-team.5"
 ```
 
 Use the [latest release](https://github.com/michaelmitchell-bit/rojo-team-create/releases/latest)

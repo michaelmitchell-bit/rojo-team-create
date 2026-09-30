@@ -117,6 +117,11 @@ jobs:
     - name: Selene
       run: selene plugin/src
 
+    - name: Team sync tests
+      run: |
+        lune run scripts/test-team-sync-policy.luau
+        lune run scripts/test-team-sync-plugin.luau
+
     - name: Rustfmt
       run: cargo fmt -- --check
 

@@ -528,6 +528,32 @@ test("a place from the old single-log format is replaced, not misread", function
 	expectEqual(store.ClassName, "Folder", "store")
 end)
 
+test("undoing a sync can't make someone else's later change look caught up", function()
+	local alex, sam = twoPeople()
+	local store = _G.__place:GetService("ServerStorage"):FindFirstChild("RojoTeamSync")
+	local function alexLog()
+		for _, child in store:GetChildren() do
+			if child.Name == alex.machine.settings.Rojo_teamSyncMachine then
+				return child
+			end
+		end
+		return nil
+	end
+
+	editFile(alex, "Inventory", "inv by alex")
+	local beforeShop = alexLog().Value
+	editFile(alex, "Shop", "shop by alex")
+	-- Sam pulls Alex's Shop, so Sam is caught up on it.
+	editFile(sam, "Shop", "shop by alex")
+
+	-- Alex undoes the Shop sync, which rolls back Alex's log, then syncs Shop again.
+	alexLog().Value = beforeShop
+	editFile(alex, "Shop", "shop by alex, second try")
+
+	expectEqual(#editFile(sam, "Shop", "shop by alex, then sam"), 1, "sam held")
+	expectEqual(sourceOf("Shop"), "shop by alex, second try", "alex's version survives")
+end)
+
 test("an old-format log written alongside the new one doesn't hide it", function()
 	local alex, sam = twoPeople()
 	editFile(alex, "Shop", "shop by alex")

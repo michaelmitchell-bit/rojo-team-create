@@ -28,7 +28,7 @@ It works with any version control, or none. The history lives in the place, in
 1. Add `"teamSync": true` to your project file.
 2. Pin this build in `rokit.toml`, replacing any existing `rojo` line:
    ```toml
-   rojo = "michaelmitchell-bit/rojo-team-create@7.7.0-team.4"
+   rojo = "michaelmitchell-bit/rojo-team-create@7.7.0-team.5"
    ```
 3. Install it and its Studio plugin:
    ```sh
@@ -39,7 +39,7 @@ It works with any version control, or none. The history lives in the place, in
    a blue **Rojo Team** button.
 
 No rokit? Grab a binary from [Releases](https://github.com/michaelmitchell-bit/rojo-team-create/releases)
-and run `rojo plugin install` with it. If `rojo --version` doesn't end in `-team.4`
+and run `rojo plugin install` with it. If `rojo --version` doesn't end in `-team.5`
 afterwards, see [SETUP.md](SETUP.md).
 
 ### AI setup
