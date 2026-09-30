@@ -153,6 +153,20 @@ local function newMachine(machineName: string, userId: number)
 			return requireNode(rawget(target, "__node"))
 		end
 
+		-- RbxDom's base64 helper grabs EncodingService when it loads, and older
+		-- Lune reflection databases don't have it. None of these tests use it.
+		if string.find(node.source, "rbx_dom_lua/base64", 1, true) then
+			env.game = {
+				GetService = function()
+					return setmetatable({}, {
+						__index = function()
+							error("EncodingService isn't available in this test harness")
+						end,
+					})
+				end,
+			}
+		end
+
 		local chunk = luau.load(fs.readFile(node.source), { debugName = machineName .. ":" .. node.source, environment = env })
 		loaded[node] = chunk()
 		return loaded[node]
